@@ -923,6 +923,135 @@ parámetro para formar el array corresponde a **CAPEC-460: HTTP Parameter Pollut
 HTB{8801630138dddbc823abda01f60eb727}
 ```
 
+---
+
+## 1.7 Partial Encryption
+
+| Campo                | Valor                        |
+|----------------------|------------------------------|
+| Categoría            | Reversing                    |
+| Dificultad           | Easy                         |
+| Puntos (XP reward)   | 260                          |
+| Fecha de resolución  | 12/11/2026                   |
+| Resuelto por         | Djedrielle                   |
+
+### Descripción del reto
+
+Reto de Reversing que entrega un ejecutable de Windows `partialencryption.exe` (PE32+ x86-64, compilado con MSVC). El programa recibe una cadena como argumento de línea de comandos y la valida contra la flag. La lógica de validación **no está en texto plano**: parte del código viaja **cifrada** dentro de la sección `.data` y se descifra y ejecuta en tiempo de ejecución (de ahí "Partial Encryption"). Por eso el análisis estático directo no revela nada, tal como sugiere el enunciado: *"Static-Analysis on this program didn't reveal much."*
+
+### Procedimiento
+
+**Paso 1 — Reconocimiento**
+
+Con `file` se confirma que es un binario de Windows de 64 bits:
+
+```
+file ./partialencryption.exe
+./partialencryption.exe: PE32+ executable for MS Windows 6.00 (console), x86-64, 5 sections
+```
+
+Aunque es un PE de Windows, al ser un reto de reversing se analiza en Linux (no requiere ejecutarse en Windows). Revisando las cadenas e importaciones destacan `VirtualAlloc`, `VirtualProtect`, `VirtualFree` y `putchar`:
+
+![](imagenes/partial_strings.png)
+
+Esa combinación (reservar memoria, cambiarle permisos a ejecutable y ejecutarla) es la firma de **código auto-descifrante**.
+
+**Paso 2 — Identificación del mecanismo (Partial Encryption)**
+
+En Ghidra se reconstruye el flujo. El `main` real (`main1`) llama a cuatro sub-rutinas:
+
+![main1](imagenes/main1.png)
+
+cada una usa una función (`mem_alloc`) que implementa el patrón:
+
+1. `VirtualAlloc(..., PAGE_READWRITE)` → buffer escribible.
+2. Descifra un blob de `.data` **bloque a bloque** (AES-NI: `aeskeygenassist` + `aesdeclast`, con clave por bloque igual al índice del bloque).
+3. `VirtualProtect(..., PAGE_EXECUTE_READ)` → vuelve el buffer ejecutable.
+4. `call` al buffer → ejecuta el código descifrado; luego `VirtualFree`.
+
+![main2.1](imagenes/main2.1.png)
+
+![main2.2](imagenes/main2.2.png)
+
+![main2.3](imagenes/main2.3.png)
+
+![main2.4](imagenes/main2.4.png)
+
+![decifrar](imagenes/decifrar.png)
+
+La validación se reparte en: guarda de argumentos (`argc == 2`), guarda de longitud (la entrada debe tener al menos 22 caracteres), cuatro blobs que comparan la flag **carácter por carácter**, y un último blob que imprime el veredicto (`Correct`/`No`).
+
+**Paso 3 — Extracción de los bytes descifrados (análisis dinámico)**
+
+Como el código interesante solo existe descifrado en memoria, se ejecuta el binario bajo **Wine** y se depura con **winedbg (gdb)** para volcarlo. Se coloca un breakpoint en `VirtualProtect` (que se llama justo cuando el buffer ya está descifrado) y se vuelca la memoria apuntada por `RCX`, identificando cada blob por su longitud (`RDX`):
+
+```bash
+winedbg --gdb ./partialencryption.exe ABCDEFGHIJKLMNOPQRSTUV
+```
+```gdb
+b VirtualProtect
+continue
+# en cada hit, identificar el blob por su longitud (RDX) y volcar:
+dump binary memory blob.bin $rcx ($rcx+$rdx)
+```
+
+![volcado](imagenes/volcado.png)
+
+![blop.bin](imagenes/blop.bin.png)
+
+**Paso 4 — Reconstrucción de la flag**
+
+Cada `.bin` volcado es código x86-64. Cargándolos en Ghidra como *raw binary* (`x86 / default / 64 / little / Visual Studio`) y decompilando, se ve que los blobs de validación comparan cada carácter de `argv[1]` contra una constante y acumulan los errores con un OR:
+
+```c
+*resultado |= (argv[1][i] != '<carácter_esperado>');
+```
+
+![a1.bin](imagenes/a1.bin.png)
+
+![a2.bin](imagenes/a2.bin.png)
+
+![a3.bin](imagenes/a3.bin.png)
+
+![a4.bin](imagenes/a4.bin.png)
+
+Juntando los caracteres esperados de los índices 0 a 21 se reconstruye la flag. Se verifica ejecutando el binario con la flag correcta:
+
+```bash
+wine ./partialencryption.exe 'HTB{W3iRd_RUnT1m3_DEC}'
+```
+
+![input_correcto](imagenes/input_correcto.png)
+
+### Herramientas utilizadas
+
+| Herramienta        | Uso en el reto                                             |
+|--------------------|------------------------------------------------------------|
+| Ghidra             | Decompilar el PE y los blobs descifrados                   |
+| objdump / strings  | Reconocimiento inicial e importaciones                     |
+| Wine               | Ejecutar el PE de Windows en Linux                         |
+| winedbg (gdb)      | Breakpoint en `VirtualProtect` y volcado de la memoria descifrada |
+
+### Debilidad (CWE)
+
+**CWE-656: Dependencia de la seguridad por oscuridad**
+
+La única protección del reto es **cifrar parte del código** para ocultar la lógica de validación. Como el binario debe descifrarlo para ejecutarlo, basta con observar la memoria en runtime (o replicar el descifrado) para recuperar la lógica; además, el carácter esperado de cada posición de la flag queda incrustado como constante en las comparaciones.
+
+### Patrón de ataque (CAPEC)
+
+**CAPEC-191: Lectura de constantes sensibles dentro de un ejecutable**
+
+Tras descifrar los blobs en runtime, se leyeron las **constantes de comparación** (los caracteres esperados de la flag) incrustadas en el código, reconstruyendo la bandera carácter por carácter.
+
+### Bandera
+
+```
+HTB{W3iRd_RUnT1m3_DEC}
+```
+
+---
+
 # 2. Calendario de resolución
 
 | #  | Fecha Inicio | Reto       | Categoría  | Puntos | Fecha Fin    | Integrante  |
@@ -933,6 +1062,7 @@ HTB{8801630138dddbc823abda01f60eb727}
 | 4  | 26/10/2026   | Last Call  | Pwn        | 260    | 26/10/2026   | Sebastian   |
 | 5  | 29/10/2026   | Cyberpsychosis | Reversing | 260 | 30/10/2026   | Sebastian   |
 | 6  | 9/11/2026    | TreaPortal | Web        | 260    | 9/11/2026    | Sebastian   |
+| 7  | 12/11/2026   | Partial Encryption | Reversing | 260 | 12/11/2026 | Djedrielle  |
 | …  |              |            |            |        |              |             |
 
 ---
@@ -947,8 +1077,9 @@ HTB{8801630138dddbc823abda01f60eb727}
 | Last Call  | Pwn         |              |  X           |
 | Cyberpsychosis | Reversing |            |  X           |
 | TreaPortal | Web         |              |  X           |
+| Partial Encryption | Reversing | X      |              |
 | …          |             |              |              |
-| **Total**  |             | **520**      | **1040**     |
+| **Total**  |             | **780**      | **1040**     |
 
 ### Verificación de requisitos
 
