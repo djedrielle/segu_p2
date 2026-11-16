@@ -2,6 +2,29 @@
 title: "Proyecto 2: Capture the Flag"
 subtitle: "IC-8071 Seguridad del Software — Instituto Tecnológico de Costa Rica"
 date: "17 noviembre, 2026"
+header-includes: |
+  \usepackage{fvextra}
+  \usepackage{seqsplit}
+  \usepackage[table]{xcolor}
+  \usepackage{mdframed}
+  \usepackage{booktabs}
+  \usepackage{etoolbox}
+  \definecolor{shadecolor}{HTML}{ECECEC}
+  \definecolor{codeframe}{HTML}{BDBDBD}
+  \definecolor{striperow}{HTML}{F2F2F2}
+  \fvset{breaklines=true, breakanywhere=true, breakautoindent=false, breakindent=0pt, breaksymbolleft={}, fontsize=\small}
+  \makeatletter
+  \let\pandocoldtexttt\texttt
+  \renewcommand{\texttt}[1]{\pandocoldtexttt{\seqsplit{#1}}}
+  \makeatother
+  \newmdenv[backgroundcolor=shadecolor,linecolor=codeframe,linewidth=0.4pt,roundcorner=2pt,innertopmargin=5pt,innerbottommargin=5pt,innerleftmargin=7pt,innerrightmargin=7pt,skipabove=7pt,skipbelow=7pt]{codebox}
+  \RecustomVerbatimEnvironment{verbatim}{Verbatim}{breaklines=true,breakanywhere=true,fontsize=\small}
+  \surroundwithmdframed[backgroundcolor=shadecolor,linecolor=codeframe,linewidth=0.4pt,roundcorner=2pt,innertopmargin=5pt,innerbottommargin=5pt,innerleftmargin=7pt,innerrightmargin=7pt,skipabove=7pt,skipbelow=7pt]{verbatim}
+  \makeatletter
+  \AtBeginDocument{\@ifundefined{Shaded}{}{\renewenvironment{Shaded}{\begin{codebox}}{\end{codebox}}}}
+  \makeatother
+  \renewcommand{\arraystretch}{1.32}
+  \AtBeginEnvironment{longtable}{\rowcolors{2}{striperow}{white}}
 ---
 
 # Información general
@@ -755,8 +778,6 @@ el flujo: registro, login y un perfil con un buscador de empleados. El endpoint
 `GET /api/user/` es el único que devuelve el objeto de un usuario **incluyendo el
 campo `flag`** — ese es el blanco.
 
-![Portal corriendo localmente](imagenes/TreaPortalLocal.png)
-
 **Paso 2 — Identificación de la vulnerabilidad**
 
 El endpoint arma la consulta XPath concatenando directamente la entrada del usuario:
@@ -819,7 +840,7 @@ Uso: `python3 exploit_treaportal.py http://<IP>:<PUERTO>` (la IP y puerto de la
 instancia de HTB). También puede hacerse a mano con dos `curl`, o en vivo desde la
 consola del navegador con un `fetch` que duplique el parámetro.
 
-![Flag obtenida con el exploit](imagenes/TreaPortalFlag.png)
+![Flag obtenida con el exploit](imagenes/TreaPortalFetch.png)
 
 ### Herramientas utilizadas
 
@@ -1175,6 +1196,12 @@ HTB{3b0cbe383374cf3f02336f9e0822997d}
 | 8  | 13/11/2026   | Secure Notes | Web      | 260    | 13/11/2026   | Djedrielle  |
 | 9  | 13/11/2026   | Offlinea   | Web        | 260    | 13/11/2026   | Djedrielle  |
 
+### Línea de tiempo
+
+La siguiente línea de tiempo muestra de forma gráfica la fecha de resolución de cada reto, separada por integrante y coloreada por categoría:
+
+![Línea de tiempo de resolución de los retos](imagenes/timeline_resolucion.pdf)
+
 ---
 
 # 3. Tabla resumen
@@ -1192,13 +1219,3 @@ HTB{3b0cbe383374cf3f02336f9e0822997d}
 | Offlinea   | Web         | X            |              |
 | …          |             |              |              |
 | **Total**  |             | **1300**     | **1040**     |
-
-### Verificación de requisitos
-
-| Requisito                          | Cumple   |
-|------------------------------------|----------|
-| Mínimo 2300 puntos (XP)            | Sí       |
-| Al menos 2 retos de Pwn            | Sí       |
-| Al menos 2 retos de Reversing      | Sí       |
-| Al menos 2 retos de Web            | Sí       |
-| Cada reto vale ≤ 500 puntos        | Sí       |
