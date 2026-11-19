@@ -1217,5 +1217,4 @@ La siguiente línea de tiempo muestra de forma gráfica la fecha de resolución 
 | Partial Encryption | Reversing | X      |              |
 | Secure Notes | Web       | X            |              |
 | Offlinea   | Web         | X            |              |
-| …          |             |              |              |
 | **Total**  |             | **1300**     | **1040**     |

